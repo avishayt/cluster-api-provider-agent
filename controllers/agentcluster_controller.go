@@ -117,6 +117,7 @@ func (r *AgentClusterReconciler) updateAgentClusterInstall(ctx context.Context, 
 			Url:           url[0:strings.LastIndex(url, "/")],
 			CaCertificate: agentCluster.Spec.IgnitionEndpoint.CaCertificate,
 		}
+		log.Infof("Updated Ignition URL: %s", agentClusterInstall.Spec.IgnitionEndpoint.Url)
 		updateACI = true
 	}
 	if updateACI {

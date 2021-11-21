@@ -159,6 +159,7 @@ func (r *AgentMachineReconciler) findAgent(ctx context.Context, log logrus.Field
 }
 
 func (r *AgentMachineReconciler) setIgnitionEndpointToken(ctx context.Context, log logrus.FieldLogger, agent *aiv1beta1.Agent, agentMachine *capiproviderv1alpha1.AgentMachine) error {
+	log.Info("Setting Ignition endpoint info")
 	if agent.Spec.IgnitionEndpointToken != "" {
 		log.Info("Ignition endpoint token already set, not updating it")
 		return nil
@@ -197,6 +198,7 @@ func (r *AgentMachineReconciler) setIgnitionEndpointToken(ctx context.Context, l
 
 	ignitionSource := ignitionConfig.Ignition.Config.Merge[0]
 	agent.Spec.MachineConfigPool = (*ignitionSource.Source)[strings.LastIndex((*ignitionSource.Source), "/")+1:]
+	log.Infof("Setting MachineConfigPool to %s", agent.Spec.MachineConfigPool)
 
 	for _, header := range ignitionSource.HTTPHeaders {
 		if header.Name != "Authorization" {
@@ -207,6 +209,7 @@ func (r *AgentMachineReconciler) setIgnitionEndpointToken(ctx context.Context, l
 			log.Errorf("did not find expected prefix for bearer token in user-data secret %s", *machine.Spec.Bootstrap.DataSecretName)
 			return errors.New("did not find expected prefix for bearer token")
 		}
+		log.Info("Found Ignition endpoint token")
 		agent.Spec.IgnitionEndpointToken = (*header.Value)[len(expectedPrefix):]
 	}
 
@@ -214,6 +217,7 @@ func (r *AgentMachineReconciler) setIgnitionEndpointToken(ctx context.Context, l
 		log.WithError(agentUpdateErr).Error("failed to update Agent with ClusterDeployment ref")
 		return err
 	}
+	log.Info("Successfully updated Ignition endpoint token and MachineConfigPool")
 	return nil
 }
 
