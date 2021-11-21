@@ -145,7 +145,7 @@ func (r *AgentMachineReconciler) findAgent(ctx context.Context, log logrus.Field
 	agentMachine.Status.Addresses = machineAddresses
 	agentMachine.Status.Ready = false
 	if err := r.setIgnitionEndpointToken(ctx, log, foundAgent, agentMachine); err != nil {
-		log.WithError(err).Error("failed getting information on ignition endpoint")
+		log.WithError(err).Warn("failed getting information on ignition endpoint")
 		return ctrl.Result{RequeueAfter: defaultRequeueAfterOnError}, err
 	}
 
@@ -169,13 +169,11 @@ func (r *AgentMachineReconciler) setIgnitionEndpointToken(ctx context.Context, l
 		return err
 	}
 	if machine == nil {
-		log.Info("Waiting for Machine Controller to set OwnerRef on AgentMachine")
-		return nil
+		return errors.New("waiting for Machine Controller to set OwnerRef on AgentMachine")
 	}
 
 	if machine.Spec.Bootstrap.DataSecretName == nil {
-		log.Info("No DataSecretName set, not setting ignition endpoint token")
-		return nil
+		return errors.New("no DataSecretName set, not setting ignition endpoint token")
 	}
 
 	secret := &corev1.Secret{}
