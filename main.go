@@ -19,7 +19,6 @@ package main
 import (
 	"flag"
 	"os"
-
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -80,6 +79,11 @@ func main() {
 	}
 	logger := logrus.New()
 	logger.SetReportCaller(true)
+
+	if err != nil {
+		setupLog.Error(err, "unable to create cluster cache tracker")
+		os.Exit(1)
+	}
 	if err = (&controllers.AgentMachineReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),

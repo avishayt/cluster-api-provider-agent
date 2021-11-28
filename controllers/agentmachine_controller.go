@@ -19,7 +19,8 @@ package controllers
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"github.com/pkg/errors"
+	"k8s.io/client-go/tools/clientcmd"
 	"strings"
 	"time"
 
@@ -325,6 +326,20 @@ func (r *AgentMachineReconciler) setAgentClusterDeploymentRef(ctx context.Contex
 
 func (r *AgentMachineReconciler) getClusterDeploymentFromAgentMachine(ctx context.Context, log logrus.FieldLogger, agentMachine *capiproviderv1alpha1.AgentMachine) (*capiproviderv1alpha1.ClusterDeploymentReference, error) {
 	// AgentMachine -> CAPI Machine -> Cluster -> ClusterDeployment
+	cluster, err := r.getClusterFromAgentMachine(ctx, log, agentMachine)
+	if err != nil || cluster == nil {
+		return nil, err
+	}
+	agentClusterRef := types.NamespacedName{Name: cluster.Spec.InfrastructureRef.Name, Namespace: cluster.Spec.InfrastructureRef.Namespace}
+	agentCluster := &capiproviderv1alpha1.AgentCluster{}
+	if err := r.Get(ctx, agentClusterRef, agentCluster); err != nil {
+		log.WithError(err).Errorf("Failed to get agentCluster %s", agentClusterRef)
+		return nil, err
+	}
+	return &agentCluster.Status.ClusterDeploymentRef, nil
+}
+
+func (r *AgentMachineReconciler) getClusterFromAgentMachine(ctx context.Context, log logrus.FieldLogger, agentMachine *capiproviderv1alpha1.AgentMachine) (*clusterv1.Cluster, error) {
 	machine, err := clusterutil.GetOwnerMachine(ctx, r.Client, agentMachine.ObjectMeta)
 	if err != nil {
 		return nil, err
@@ -339,15 +354,7 @@ func (r *AgentMachineReconciler) getClusterDeploymentFromAgentMachine(ctx contex
 		log.Info("Machine is missing cluster label or cluster does not exist")
 		return nil, nil
 	}
-
-	agentClusterRef := types.NamespacedName{Name: cluster.Spec.InfrastructureRef.Name, Namespace: cluster.Spec.InfrastructureRef.Namespace}
-	agentCluster := &capiproviderv1alpha1.AgentCluster{}
-	if err := r.Get(ctx, agentClusterRef, agentCluster); err != nil {
-		log.WithError(err).Errorf("Failed to get agentCluster %s", agentClusterRef)
-		return nil, err
-	}
-
-	return &agentCluster.Status.ClusterDeploymentRef, nil
+	return cluster, nil
 }
 
 func (r *AgentMachineReconciler) updateAgentStatus(ctx context.Context, log logrus.FieldLogger, agentMachine *capiproviderv1alpha1.AgentMachine, agent *aiv1beta1.Agent) (ctrl.Result, error) {
@@ -372,10 +379,75 @@ func (r *AgentMachineReconciler) updateAgentStatus(ctx context.Context, log logr
 		return ctrl.Result{Requeue: true}, nil
 	}
 	if agentMachine.Status.Ready {
-		// No need to requeue in case the agentMachine is ready
+		if err := r.setNodeProviderID(ctx, log, agentMachine); err != nil {
+			log.Infof("can't set node provider ID, error: %s", err)
+			return ctrl.Result{RequeueAfter: defaultRequeueWaitingForAgentToBeInstalled}, nil
+		}
+			// No need to requeue in case the agentMachine is ready
 		return ctrl.Result{}, nil
 	}
 	return ctrl.Result{RequeueAfter: defaultRequeueWaitingForAgentToBeInstalled}, nil
+}
+
+func (r *AgentMachineReconciler) setNodeProviderID(ctx context.Context, log logrus.FieldLogger, agentMachine *capiproviderv1alpha1.AgentMachine) error {
+	log.Info("Setting node provider ID")
+	remoteClient, err := r.getRemoteClient(ctx, agentMachine)
+	if err != nil {
+		log.WithError(err).Errorf("Failed to get remote client")
+		return err
+	}
+	nodeName := ""
+	for _, address := range agentMachine.Status.Addresses {
+		if corev1.NodeAddressType(address.Type) == corev1.NodeInternalDNS {
+			nodeName = address.Address
+			break
+		}
+	}
+	if nodeName == "" {
+		return errors.New("failed to find node InternalDNS")
+	}
+	node := corev1.Node{}
+	err = remoteClient.Get(ctx, types.NamespacedName{Name: nodeName, Namespace: ""}, &node)
+	if err != nil {
+		return err
+	}
+	node.Spec.ProviderID = *agentMachine.Spec.ProviderID
+	if err = remoteClient.Update(ctx, &node); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *AgentMachineReconciler) getRemoteClient(ctx context.Context, agentMachine *capiproviderv1alpha1.AgentMachine) (client.Client, error) {
+	secretKey := client.ObjectKey{
+		Namespace: agentMachine.Namespace,
+		Name:      "admin-kubeconfig",
+	}
+	secret := corev1.Secret{}
+	r.Client.Get(ctx, secretKey, &secret)
+	if secret.Data == nil {
+		return nil, errors.Errorf("Secret %s/%s  does not contain any data", secret.Namespace, secret.Name)
+	}
+	kubeconfigData, ok := secret.Data["kubeconfig"]
+	if !ok || len(kubeconfigData) == 0 {
+		return nil, errors.Errorf("Secret data for %s/%s  does not contain kubeconfig", secret.Namespace, secret.Name)
+	}
+	clientConfig, err := clientcmd.NewClientConfigFromBytes(kubeconfigData)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get clientconfig from kubeconfig data in secret")
+	}
+	restConfig, err := clientConfig.ClientConfig()
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get restconfig for remote kube client")
+	}
+
+	schemes := GetKubeClientSchemes(r.Scheme)
+	targetClient, err := client.New(restConfig, client.Options{Scheme: schemes})
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get remote kube client")
+	}
+	return targetClient, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
